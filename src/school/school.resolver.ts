@@ -11,11 +11,13 @@ import {
   ClassDetail,
   Classroom,
   CreateAssessmentInput,
+  ConfigureClassGradingInput,
   Dashboard,
   Gradebook,
   SaveGradesInput,
   SaveGradesPayload,
   SaveAssessmentScoresInput,
+  SaveGradebookScoresInput,
   Student,
   StudentProfile,
   TeacherStudentInput,
@@ -29,8 +31,11 @@ export class SchoolResolver {
   constructor(private readonly school: SchoolService) {}
 
   @Query(() => Dashboard)
-  dashboard(@CurrentUser() user: JwtUser) {
-    return this.school.dashboard(user.sub);
+  dashboard(
+    @CurrentUser() user: JwtUser,
+    @Args('quarter', { type: () => Int, defaultValue: 1 }) quarter: number,
+  ) {
+    return this.school.dashboard(user.sub, quarter);
   }
 
   @Query(() => [Classroom])
@@ -112,5 +117,16 @@ export class SchoolResolver {
   @Mutation(() => SaveGradesPayload)
   saveAssessmentScores(@Args('input') input: SaveAssessmentScoresInput, @CurrentUser() user: JwtUser) {
     return this.school.saveAssessmentScores(input, user.sub);
+  }
+
+  @Mutation(() => SaveGradesPayload)
+  saveGradebookScores(@Args('input') input: SaveGradebookScoresInput, @CurrentUser() user: JwtUser) {
+    return this.school.saveGradebookScores(input, user.sub);
+  }
+
+  @Mutation(() => Gradebook)
+  async configureClassGrading(@Args('input') input: ConfigureClassGradingInput, @CurrentUser() user: JwtUser) {
+    await this.school.configureClassGrading(input, user.sub);
+    return this.school.gradebook(input.classroomId, input.quarter, user.sub);
   }
 }

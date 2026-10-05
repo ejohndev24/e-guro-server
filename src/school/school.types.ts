@@ -68,6 +68,7 @@ export class DashboardStats {
   @Field(() => Int) studentCount!: number;
   @Field(() => Float) attendanceRate!: number;
   @Field(() => Int) pendingGrades!: number;
+  @Field(() => Float, { nullable: true }) averageGrade?: number;
 }
 
 @ObjectType()
@@ -78,11 +79,21 @@ export class AtRiskStudent {
 }
 
 @ObjectType()
+export class ClassGradeReport {
+  @Field(() => Classroom) classroom!: Classroom;
+  @Field(() => Float, { nullable: true }) averageGrade?: number;
+  @Field(() => Int) gradedStudents!: number;
+  @Field(() => Int) studentCount!: number;
+  @Field(() => Int) passingStudents!: number;
+}
+
+@ObjectType()
 export class Dashboard {
   @Field() teacherName!: string;
   @Field(() => DashboardStats) stats!: DashboardStats;
   @Field(() => [Classroom]) classes!: Classroom[];
   @Field(() => [AtRiskStudent]) atRisk!: AtRiskStudent[];
+  @Field(() => [ClassGradeReport]) gradeReports!: ClassGradeReport[];
 }
 
 @ObjectType()
@@ -184,6 +195,7 @@ export class GradebookCategory {
 @ObjectType()
 export class GradebookStudent {
   @Field(() => Student) student!: Student;
+  @Field(() => Float, { nullable: true }) initialGrade?: number;
   @Field(() => Float, { nullable: true }) finalGrade?: number;
 }
 
@@ -214,4 +226,31 @@ export class AssessmentScoreInput {
 export class SaveAssessmentScoresInput {
   @Field(() => ID) @IsString() assessmentId!: string;
   @Field(() => [AssessmentScoreInput]) @IsArray() @ValidateNested({ each: true }) @Type(() => AssessmentScoreInput) scores!: AssessmentScoreInput[];
+}
+
+@InputType()
+export class SaveGradebookAssessmentInput {
+  @Field(() => ID) @IsString() assessmentId!: string;
+  @Field(() => [AssessmentScoreInput]) @IsArray() @ValidateNested({ each: true }) @Type(() => AssessmentScoreInput) scores!: AssessmentScoreInput[];
+}
+
+@InputType()
+export class SaveGradebookScoresInput {
+  @Field(() => ID) @IsString() classroomId!: string;
+  @Field(() => Int) @IsInt() @Min(1) @Max(4) quarter!: number;
+  @Field(() => [SaveGradebookAssessmentInput]) @IsArray() @ValidateNested({ each: true }) @Type(() => SaveGradebookAssessmentInput) assessments!: SaveGradebookAssessmentInput[];
+}
+
+@InputType()
+export class ClassGradingCategoryInput {
+  @Field(() => ID, { nullable: true }) @IsOptional() @IsString() id?: string;
+  @Field() @IsString() @MinLength(1) name!: string;
+  @Field(() => Float) @IsNumber() @Min(0.01) @Max(100) weight!: number;
+}
+
+@InputType()
+export class ConfigureClassGradingInput {
+  @Field(() => ID) @IsString() classroomId!: string;
+  @Field(() => Int) @IsInt() @Min(1) @Max(4) quarter!: number;
+  @Field(() => [ClassGradingCategoryInput]) @IsArray() @ValidateNested({ each: true }) @Type(() => ClassGradingCategoryInput) categories!: ClassGradingCategoryInput[];
 }

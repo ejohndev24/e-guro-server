@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { AttendanceStatus, Prisma, UserRole } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { AddStudentToClassInput, CreateAssessmentInput, SaveAssessmentScoresInput, SaveGradesInput, TeacherClassInput, TeacherStudentInput } from './school.types';
+import { AddStudentToClassInput, ConfigureClassGradingInput, CreateAssessmentInput, SaveAssessmentScoresInput, SaveGradebookScoresInput, SaveGradesInput, TeacherClassInput, TeacherStudentInput } from './school.types';
+import { computeStudentGrade, GradeCategoryResult, transmuteDepEdGrade, usesDepEdTransmutation } from './grading';
 
 const studentShape = (student: { id: string; studentNo: string; firstName: string; lastName: string; email: string | null }) => ({
   ...student,
@@ -147,7 +148,8 @@ export class SchoolService {
     });
   }
 
-  async dashboard(teacherId: string) {
+  async dashboard(teacherId: string, quarter = 1) {
+    if (quarter < 1 || quarter > 4) throw new BadRequestException('Quarter must be from 1 to 4');
     const teacher = await this.teacher(teacherId);
     const classes = await this.prisma.classroom.findMany({
       where: { teacherId: teacher.id },
@@ -162,13 +164,26 @@ export class SchoolService {
       this.prisma.attendance.count({ where: { classroomId: { in: classIds } } }),
       this.prisma.attendance.count({ where: { classroomId: { in: classIds }, status: { in: ['PRESENT', 'LATE'] } } }),
       this.prisma.grade.findMany({
-        where: { classroomId: { in: classIds }, quarter: 1 },
+        where: { classroomId: { in: classIds }, quarter },
         include: { student: true, classroom: { include: { _count: { select: { enrollments: true } } } } },
         orderBy: { finalGrade: 'asc' },
       }),
       this.prisma.enrollment.count({ where: { classroomId: { in: classIds } } }),
     ]);
     const gradedKeys = new Set(grades.map((grade) => `${grade.classroomId}:${grade.studentId}`));
+    const gradeValues = grades.map((grade) => grade.finalGrade);
+    const gradeReports = classes.map((classroom) => {
+      const classGrades = grades.filter((grade) => grade.classroomId === classroom.id);
+      return {
+        classroom: classroomShape(classroom),
+        averageGrade: classGrades.length
+          ? Math.round((classGrades.reduce((sum, grade) => sum + grade.finalGrade, 0) / classGrades.length) * 10) / 10
+          : undefined,
+        gradedStudents: classGrades.length,
+        studentCount: classroom._count.enrollments,
+        passingStudents: classGrades.filter((grade) => grade.finalGrade >= 75).length,
+      };
+    });
 
     return {
       teacherName: teacher.name,
@@ -177,6 +192,9 @@ export class SchoolService {
         studentCount,
         attendanceRate: attendanceTotal ? Math.round((attendancePresent / attendanceTotal) * 1000) / 10 : 0,
         pendingGrades: Math.max(0, enrollmentCount - gradedKeys.size),
+        averageGrade: gradeValues.length
+          ? Math.round((gradeValues.reduce((sum, grade) => sum + grade, 0) / gradeValues.length) * 10) / 10
+          : undefined,
       },
       classes: classes.map(classroomShape),
       atRisk: grades.filter((grade) => grade.finalGrade < 75).slice(0, 5).map((grade) => ({
@@ -184,6 +202,7 @@ export class SchoolService {
         classroom: classroomShape(grade.classroom),
         currentGrade: grade.finalGrade,
       })),
+      gradeReports,
     };
   }
 
@@ -278,10 +297,17 @@ export class SchoolService {
   }
 
   async saveGrades(input: SaveGradesInput, teacherId: string) {
-    await this.assertOwnsClass(input.classroomId, teacherId);
+    const classroom = await this.prisma.classroom.findFirst({
+      where: { id: input.classroomId, teacherId },
+      include: { gradingScheme: true },
+    });
+    if (!classroom) throw new NotFoundException('Classroom not found');
     const gradeRows = input.entries.map((entry) => ({
       ...entry,
-      finalGrade: Math.round((entry.quiz * 0.2 + entry.activity * 0.3 + entry.exam * 0.5) * 10) / 10,
+      finalGrade: (() => {
+        const initial = Math.round((entry.quiz * 0.2 + entry.activity * 0.3 + entry.exam * 0.5) * 100) / 100;
+        return usesDepEdTransmutation(classroom.gradingScheme?.educationLevel) ? transmuteDepEdGrade(initial) : initial;
+      })(),
     }));
     const grades = await this.prisma.$transaction(gradeRows.map((entry) => this.prisma.grade.upsert({
       where: { studentId_classroomId_quarter: { studentId: entry.studentId, classroomId: input.classroomId, quarter: input.quarter } },
@@ -319,21 +345,13 @@ export class SchoolService {
       })),
     }));
     const students = classroom.enrollments.map(({ student }) => {
-      let complete = categories.length > 0;
-      let finalGrade = 0;
-      for (const category of categories) {
-        if (!category.assessments.length) { complete = false; continue; }
-        let earned = 0;
-        let possible = 0;
-        for (const assessment of category.assessments) {
-          const entry = assessment.scores.find((score) => score.studentId === student.id);
-          if (entry?.score === undefined) complete = false;
-          else earned += entry.score;
-          possible += assessment.maxScore;
-        }
-        if (possible > 0) finalGrade += (earned / possible) * category.weight;
-      }
-      return { student: studentShape(student), finalGrade: complete ? Math.round(finalGrade * 100) / 100 : undefined };
+      const computation = computeStudentGrade(student.id, categories, classroom.gradingScheme?.educationLevel);
+      return {
+        student: studentShape(student),
+        initialGrade: computation?.initialGrade,
+        finalGrade: computation?.finalGrade,
+        components: computation?.components,
+      };
     });
     return { classroom: classroomShape(classroom), schemeName: classroom.gradingScheme?.name, categories, students };
   }
@@ -344,9 +362,12 @@ export class SchoolService {
       where: { id: input.categoryId, scheme: { classrooms: { some: { id: input.classroomId } } } },
     });
     if (!category) throw new BadRequestException('This category is not part of the class grading template');
-    return this.prisma.assessment.create({
+    const assessment = await this.prisma.assessment.create({
       data: { classroomId: input.classroomId, categoryId: input.categoryId, title: input.title.trim(), maxScore: input.maxScore, quarter: input.quarter },
     });
+    // A newly added item makes the quarter incomplete until its scores are encoded.
+    await this.prisma.grade.deleteMany({ where: { classroomId: input.classroomId, quarter: input.quarter } });
+    return assessment;
   }
 
   async saveAssessmentScores(input: SaveAssessmentScoresInput, teacherId: string) {
@@ -367,7 +388,158 @@ export class SchoolService {
         update: { score: item.score },
         create: { assessmentId: assessment.id, studentId: item.studentId, score: item.score },
       })));
-    return { count: input.scores.length, grades: [] };
+    const gradebook = await this.gradebook(assessment.classroomId, assessment.quarter, teacherId);
+    const grades = await this.syncComputedGrades(assessment.classroomId, assessment.quarter, gradebook.students);
+    return { count: input.scores.length, grades };
+  }
+
+  async saveGradebookScores(input: SaveGradebookScoresInput, teacherId: string) {
+    await this.assertOwnsClass(input.classroomId, teacherId);
+    if (!input.assessments.length) throw new BadRequestException('No changed assessments were provided');
+    const assessmentIds = input.assessments.map((item) => item.assessmentId);
+    if (new Set(assessmentIds).size !== assessmentIds.length) throw new BadRequestException('Each assessment can only be saved once');
+
+    const [assessments, enrollments] = await Promise.all([
+      this.prisma.assessment.findMany({
+        where: { id: { in: assessmentIds }, classroomId: input.classroomId, quarter: input.quarter },
+      }),
+      this.prisma.enrollment.findMany({ where: { classroomId: input.classroomId }, select: { studentId: true } }),
+    ]);
+    if (assessments.length !== assessmentIds.length) throw new BadRequestException('One or more assessments are unavailable for this class and quarter');
+
+    const assessmentById = new Map(assessments.map((assessment) => [assessment.id, assessment]));
+    const enrolled = new Set(enrollments.map((item) => item.studentId));
+    const operations: Prisma.PrismaPromise<unknown>[] = [];
+    for (const item of input.assessments) {
+      const assessment = assessmentById.get(item.assessmentId)!;
+      if (item.scores.some((score) => !enrolled.has(score.studentId))) throw new BadRequestException('A student is not enrolled in this class');
+      if (item.scores.some((score) => score.score !== undefined && score.score > Number(assessment.maxScore))) {
+        throw new BadRequestException(`${assessment.title} scores cannot exceed ${Number(assessment.maxScore)}`);
+      }
+      for (const score of item.scores) {
+        operations.push(score.score === undefined
+          ? this.prisma.studentScore.deleteMany({ where: { assessmentId: assessment.id, studentId: score.studentId } })
+          : this.prisma.studentScore.upsert({
+            where: { assessmentId_studentId: { assessmentId: assessment.id, studentId: score.studentId } },
+            update: { score: score.score },
+            create: { assessmentId: assessment.id, studentId: score.studentId, score: score.score },
+          }));
+      }
+    }
+    await this.prisma.$transaction(operations);
+    const gradebook = await this.gradebook(input.classroomId, input.quarter, teacherId);
+    const grades = await this.syncComputedGrades(input.classroomId, input.quarter, gradebook.students);
+    return { count: operations.length, grades };
+  }
+
+  async configureClassGrading(input: ConfigureClassGradingInput, teacherId: string) {
+    if (!input.categories.length) throw new BadRequestException('Add at least one grading category');
+    const total = Math.round(input.categories.reduce((sum, category) => sum + category.weight, 0) * 100) / 100;
+    if (total !== 100) throw new BadRequestException(`Category weights must equal 100%. Current total is ${total}%`);
+    const names = input.categories.map((category) => category.name.trim().toLowerCase());
+    if (new Set(names).size !== names.length) throw new BadRequestException('Category names must be unique');
+
+    const classroom = await this.prisma.classroom.findFirst({
+      where: { id: input.classroomId, teacherId },
+      include: {
+        school: true,
+        gradingScheme: {
+          include: { categories: { include: { assessments: { where: { classroomId: input.classroomId }, select: { id: true } } } } },
+        },
+      },
+    });
+    if (!classroom) throw new NotFoundException('Classroom not found');
+    if (!classroom.school.isPersonal) throw new BadRequestException('School-managed grading templates are edited by the school administrator');
+    if (!classroom.gradingScheme) throw new BadRequestException('This class does not have a grading template');
+
+    const existingById = new Map(classroom.gradingScheme.categories.map((category) => [category.id, category]));
+    for (const category of input.categories) {
+      if (category.id && !existingById.has(category.id)) throw new BadRequestException('One or more grading categories are unavailable');
+    }
+    const retainedIds = new Set(input.categories.flatMap((category) => category.id ? [category.id] : []));
+    const removedWithAssessments = classroom.gradingScheme.categories.find((category) => !retainedIds.has(category.id) && category.assessments.length);
+    if (removedWithAssessments) throw new BadRequestException(`Move or remove assessments from ${removedWithAssessments.name} before deleting that category`);
+
+    const templateName = `${classroom.subject} - ${classroom.section}`;
+    const previous = await this.prisma.gradingScheme.findFirst({
+      where: { schoolId: classroom.schoolId, name: templateName },
+      orderBy: { version: 'desc' },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      const scheme = await tx.gradingScheme.create({
+        data: {
+          name: templateName,
+          educationLevel: classroom.gradingScheme!.educationLevel,
+          status: 'ACTIVE',
+          version: (previous?.version ?? 0) + 1,
+          schoolId: classroom.schoolId,
+        },
+      });
+      for (const [position, category] of input.categories.entries()) {
+        const created = await tx.gradeCategory.create({
+          data: { schemeId: scheme.id, name: category.name.trim(), weight: category.weight, position },
+        });
+        if (category.id) {
+          await tx.assessment.updateMany({
+            where: { classroomId: classroom.id, categoryId: category.id },
+            data: { categoryId: created.id },
+          });
+        }
+      }
+      await tx.classroom.update({ where: { id: classroom.id }, data: { gradingSchemeId: scheme.id } });
+    });
+    for (const quarter of [1, 2, 3, 4]) {
+      const gradebook = await this.gradebook(classroom.id, quarter, teacherId);
+      await this.syncComputedGrades(classroom.id, quarter, gradebook.students);
+    }
+  }
+
+  private componentScore(components: GradeCategoryResult[] | undefined, names: string[]) {
+    const match = components?.find((component) => names.some((name) => component.name.toLowerCase().includes(name)));
+    return match?.percentageScore ?? 0;
+  }
+
+  private async syncComputedGrades(
+    classroomId: string,
+    quarter: number,
+    students: Array<{
+      student: { id: string };
+      finalGrade?: number;
+      components?: GradeCategoryResult[];
+    }>,
+  ) {
+    const complete = students.filter((entry) => entry.finalGrade !== undefined);
+    const completeIds = complete.map((entry) => entry.student.id);
+    const operations: Prisma.PrismaPromise<unknown>[] = [
+      this.prisma.grade.deleteMany({
+        where: {
+          classroomId,
+          quarter,
+          ...(completeIds.length ? { studentId: { notIn: completeIds } } : {}),
+        },
+      }),
+      ...complete.map((entry) => this.prisma.grade.upsert({
+        where: { studentId_classroomId_quarter: { studentId: entry.student.id, classroomId, quarter } },
+        update: {
+          quiz: this.componentScore(entry.components, ['written', 'quiz']),
+          activity: this.componentScore(entry.components, ['performance', 'activity']),
+          exam: this.componentScore(entry.components, ['quarterly', 'exam']),
+          finalGrade: entry.finalGrade!,
+        },
+        create: {
+          studentId: entry.student.id,
+          classroomId,
+          quarter,
+          quiz: this.componentScore(entry.components, ['written', 'quiz']),
+          activity: this.componentScore(entry.components, ['performance', 'activity']),
+          exam: this.componentScore(entry.components, ['quarterly', 'exam']),
+          finalGrade: entry.finalGrade!,
+        },
+      })),
+    ];
+    await this.prisma.$transaction(operations);
+    return this.prisma.grade.findMany({ where: { classroomId, quarter } });
   }
 
   private async assertOwnsClass(classroomId: string, teacherId: string) {

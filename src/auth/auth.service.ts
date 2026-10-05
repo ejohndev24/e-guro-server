@@ -48,11 +48,11 @@ export class AuthService {
       });
       await tx.gradingScheme.create({
         data: {
-          name: 'Default Grading', educationLevel: 'CUSTOM', status: 'ACTIVE', schoolId: school.id,
+          name: 'DepEd G1-10 Languages / AP / EsP', educationLevel: 'ELEMENTARY', status: 'ACTIVE', schoolId: school.id,
           categories: { create: [
             { name: 'Written Works', weight: 30, position: 0 },
-            { name: 'Performance Tasks', weight: 40, position: 1 },
-            { name: 'Quarterly Assessment', weight: 30, position: 2 },
+            { name: 'Performance Tasks', weight: 50, position: 1 },
+            { name: 'Quarterly Assessment', weight: 20, position: 2 },
           ] },
         },
       });
