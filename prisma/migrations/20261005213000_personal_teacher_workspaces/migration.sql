@@ -1,0 +1,1 @@
+ALTER TABLE "School" ADD COLUMN "isPersonal" BOOLEAN NOT NULL DEFAULT false;

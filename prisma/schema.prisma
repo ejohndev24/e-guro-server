@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  TEACHER
+}
+
+enum EducationLevel {
+  KINDERGARTEN
+  ELEMENTARY
+  JUNIOR_HIGH
+  SENIOR_HIGH
+  COLLEGE
+  CUSTOM
+}
+
+enum GradingSchemeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model School {
+  id        String      @id @default(cuid())
+  name      String
+  code      String      @unique
+  isPersonal Boolean    @default(false)
+  users     User[]
+  classes   Classroom[]
+  students  Student[]
+  gradingSchemes GradingScheme[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model User {
+  id                 String      @id @default(cuid())
+  name               String
+  email              String      @unique
+  passwordHash       String?
+  role               UserRole
+  mustChangePassword Boolean     @default(true)
+  inviteTokenHash    String?
+  inviteExpiresAt    DateTime?
+  schoolId           String?
+  school             School?     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classes            Classroom[] @relation("TeacherClasses")
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@index([schoolId, role])
+}
+
+model Student {
+  id          String       @id @default(cuid())
+  studentNo   String
+  qrCode      String       @unique
+  firstName   String
+  lastName    String
+  email       String?
+  schoolId    String
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enrollments Enrollment[]
+  attendances Attendance[]
+  grades      Grade[]
+  scores      StudentScore[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([schoolId, studentNo])
+  @@index([schoolId, lastName, firstName])
+}
+
+model Classroom {
+  id          String       @id @default(cuid())
+  gradeLevel  Int
+  section     String
+  subject     String
+  room        String
+  scheduleDay String
+  startTime   String
+  endTime     String
+  schoolYear  String       @default("")
+  term        String       @default("")
+  teacherId   String
+  teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id], onDelete: Cascade)
+  schoolId    String
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enrollments Enrollment[]
+  attendances Attendance[]
+  grades      Grade[]
+  gradingSchemeId String?
+  gradingScheme GradingScheme? @relation(fields: [gradingSchemeId], references: [id], onDelete: SetNull)
+  assessments Assessment[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([teacherId])
+  @@index([schoolId])
+  @@index([gradingSchemeId])
+}
+
+model Enrollment {
+  id          String    @id @default(cuid())
+  studentId   String
+  classroomId String
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  enrolledAt  DateTime  @default(now())
+
+  @@unique([studentId, classroomId])
+  @@index([classroomId])
+}
+
+model Attendance {
+  id          String           @id @default(cuid())
+  date        DateTime         @db.Date
+  checkedAt   DateTime?
+  status      AttendanceStatus
+  studentId   String
+  classroomId String
+  student     Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classroom   Classroom        @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([studentId, classroomId, date])
+  @@index([classroomId, date])
+  @@index([studentId, date])
+}
+
+model Grade {
+  id          String    @id @default(cuid())
+  quarter     Int
+  quiz        Float
+  activity    Float
+  exam        Float
+  finalGrade  Float
+  studentId   String
+  classroomId String
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([studentId, classroomId, quarter])
+  @@index([classroomId, quarter])
+  @@index([studentId])
+}
+
+model GradingScheme {
+  id             String              @id @default(cuid())
+  name           String
+  educationLevel EducationLevel
+  status         GradingSchemeStatus @default(DRAFT)
+  version        Int                 @default(1)
+  schoolId       String
+  school         School              @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  categories     GradeCategory[]
+  classrooms     Classroom[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([schoolId, name, version])
+  @@index([schoolId, status])
+}
+
+model GradeCategory {
+  id        String        @id @default(cuid())
+  name      String
+  weight    Decimal       @db.Decimal(5, 2)
+  position  Int           @default(0)
+  schemeId  String
+  scheme    GradingScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  assessments Assessment[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([schemeId, name])
+  @@index([schemeId, position])
+}
+
+model Assessment {
+  id          String        @id @default(cuid())
+  title       String
+  maxScore    Decimal       @db.Decimal(8, 2)
+  quarter     Int
+  categoryId  String
+  category    GradeCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  classroomId String
+  classroom   Classroom     @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  scores      StudentScore[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([classroomId, quarter])
+  @@index([categoryId])
+}
+
+model StudentScore {
+  id           String     @id @default(cuid())
+  score        Decimal?   @db.Decimal(8, 2)
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([assessmentId, studentId])
+  @@index([studentId])
+}
