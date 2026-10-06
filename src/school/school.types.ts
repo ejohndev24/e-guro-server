@@ -1,9 +1,12 @@
 import { Field, Float, ID, InputType, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
-import { AttendanceStatus } from '@prisma/client';
-import { ArrayUnique, IsArray, IsEmail, IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
+import { AttendanceScope, AttendanceStatus, EducationLevel, LearnerSex } from '@prisma/client';
+import { ArrayUnique, IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 registerEnumType(AttendanceStatus, { name: 'AttendanceStatus' });
+registerEnumType(AttendanceScope, { name: 'AttendanceScope' });
+registerEnumType(EducationLevel, { name: 'EducationLevel' });
+registerEnumType(LearnerSex, { name: 'LearnerSex' });
 
 @ObjectType()
 export class Student {
@@ -13,6 +16,9 @@ export class Student {
   @Field() lastName!: string;
   @Field() fullName!: string;
   @Field({ nullable: true }) email?: string;
+  @Field({ nullable: true }) lrn?: string;
+  @Field({ nullable: true }) birthDate?: Date;
+  @Field(() => LearnerSex, { nullable: true }) sex?: LearnerSex;
 }
 
 @ObjectType()
@@ -29,6 +35,8 @@ export class Classroom {
   @Field() term!: string;
   @Field(() => Int) studentCount!: number;
   @Field() displayName!: string;
+  @Field(() => EducationLevel) educationLevel!: EducationLevel;
+  @Field() isAdvisory!: boolean;
 }
 
 @ObjectType()
@@ -37,6 +45,8 @@ export class Attendance {
   @Field() date!: Date;
   @Field({ nullable: true }) checkedAt?: Date;
   @Field(() => AttendanceStatus) status!: AttendanceStatus;
+  @Field({ nullable: true }) reason?: string;
+  @Field(() => AttendanceScope) scope!: AttendanceScope;
 }
 
 @ObjectType()
@@ -60,6 +70,37 @@ export class RosterStudent {
 export class ClassDetail {
   @Field(() => Classroom) classroom!: Classroom;
   @Field(() => [RosterStudent]) roster!: RosterStudent[];
+}
+
+@ObjectType()
+export class StudentGroup {
+  @Field(() => ID) id!: string;
+  @Field(() => Int) gradeLevel!: number;
+  @Field() section!: string;
+  @Field() schoolYear!: string;
+  @Field() term!: string;
+  @Field(() => EducationLevel) educationLevel!: EducationLevel;
+  @Field() displayName!: string;
+  @Field(() => Int) studentCount!: number;
+  @Field() isAdvisory!: boolean;
+  @Field(() => [Classroom]) classes!: Classroom[];
+  @Field(() => [Student]) students!: Student[];
+}
+
+@InputType()
+export class CreateStudentGroupInput {
+  @Field(() => Int) @IsInt() @Min(0) @Max(20) gradeLevel!: number;
+  @Field() @IsString() @MinLength(1) section!: string;
+  @Field() @Matches(/^\d{4}-\d{4}$/) schoolYear!: string;
+  @Field() @IsString() @MinLength(1) term!: string;
+  @Field(() => EducationLevel) @IsEnum(EducationLevel) educationLevel!: EducationLevel;
+  @Field({ defaultValue: false }) @IsBoolean() isAdvisory!: boolean;
+}
+
+@InputType()
+export class SetGroupAdviserInput {
+  @Field(() => ID) @IsString() groupId!: string;
+  @Field() @IsBoolean() isAdvisory!: boolean;
 }
 
 @ObjectType()
@@ -115,6 +156,7 @@ export class StudentProfile {
 
 @InputType()
 export class TeacherClassInput {
+  @Field(() => ID, { nullable: true }) @IsOptional() @IsString() groupId?: string;
   @Field() @IsString() @MinLength(1) subject!: string;
   @Field(() => Int) @IsInt() @Min(0) @Max(20) gradeLevel!: number;
   @Field() @IsString() @MinLength(1) section!: string;
@@ -124,6 +166,8 @@ export class TeacherClassInput {
   @Field() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) endTime!: string;
   @Field() @Matches(/^\d{4}-\d{4}$/) schoolYear!: string;
   @Field() @IsString() @MinLength(1) term!: string;
+  @Field(() => EducationLevel) @IsEnum(EducationLevel) educationLevel!: EducationLevel;
+  @Field({ defaultValue: false }) isAdvisory!: boolean;
 }
 
 @InputType()
@@ -141,7 +185,11 @@ export class TeacherStudentInput {
   @Field() @IsString() @MinLength(1) firstName!: string;
   @Field() @IsString() @MinLength(1) lastName!: string;
   @Field({ nullable: true }) @IsOptional() @IsEmail() email?: string;
+  @Field({ nullable: true }) @IsOptional() @IsString() lrn?: string;
+  @Field({ nullable: true }) @IsOptional() @IsDateString() birthDate?: string;
+  @Field(() => LearnerSex, { nullable: true }) @IsOptional() @IsEnum(LearnerSex) sex?: LearnerSex;
   @Field(() => [ID], { defaultValue: [] }) @IsArray() @ArrayUnique() @IsString({ each: true }) classroomIds!: string[];
+  @Field(() => [ID], { defaultValue: [] }) @IsArray() @ArrayUnique() @IsString({ each: true }) groupIds!: string[];
 }
 
 @ObjectType()

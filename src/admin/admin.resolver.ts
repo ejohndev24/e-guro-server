@@ -20,6 +20,7 @@ import {
 } from './admin.types';
 import { Roles } from './roles.decorator';
 import { RolesGuard } from './roles.guard';
+import { UpdateSchoolProfileInput } from '../school/school.report-types';
 
 @Resolver()
 @UseGuards(GqlAuthGuard, RolesGuard)
@@ -91,6 +92,13 @@ export class AdminResolver {
   saveStudent(@Args('input') input: SaveStudentInput, @CurrentUser() user: JwtUser) {
     this.assertSchoolAccess(user, input.schoolId);
     return this.admin.saveStudent(input);
+  }
+
+  @Mutation(() => SchoolDetail)
+  @Roles(UserRole.SCHOOL_ADMIN)
+  updateSchoolProfile(@Args('schoolId', { type: () => ID }) schoolId: string, @Args('input') input: UpdateSchoolProfileInput, @CurrentUser() user: JwtUser) {
+    this.assertSchoolAccess(user, schoolId);
+    return this.admin.updateSchoolProfile(schoolId, input);
   }
 
   @Query(() => [GradingSchemeView])

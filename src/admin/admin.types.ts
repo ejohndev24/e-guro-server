@@ -1,11 +1,12 @@
 import { Field, Float, ID, InputType, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
-import { EducationLevel, GradingSchemeStatus, UserRole } from '@prisma/client';
+import { EducationLevel, GradingSchemeStatus, LearnerSex, UserRole } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { ArrayUnique, IsArray, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, Length, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayUnique, IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsInt, IsNumber, IsOptional, IsString, Length, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
 import { AuthUser } from '../auth/auth.types';
 
 registerEnumType(EducationLevel, { name: 'EducationLevel' });
 registerEnumType(GradingSchemeStatus, { name: 'GradingSchemeStatus' });
+registerEnumType(LearnerSex, { name: 'LearnerSex' });
 
 @ObjectType()
 export class SchoolSummary {
@@ -16,6 +17,12 @@ export class SchoolSummary {
   @Field(() => Int) studentCount!: number;
   @Field(() => Int) classCount!: number;
   @Field() createdAt!: Date;
+  @Field({ nullable: true }) schoolIdNumber?: string;
+  @Field({ nullable: true }) region?: string;
+  @Field({ nullable: true }) division?: string;
+  @Field({ nullable: true }) district?: string;
+  @Field({ nullable: true }) address?: string;
+  @Field({ nullable: true }) schoolHeadName?: string;
 }
 
 @ObjectType()
@@ -62,6 +69,8 @@ export class AdminClassroom {
   @Field(() => ID, { nullable: true }) gradingSchemeId?: string;
   @Field({ nullable: true }) gradingSchemeName?: string;
   @Field(() => Int) studentCount!: number;
+  @Field(() => EducationLevel) educationLevel!: EducationLevel;
+  @Field() isAdvisory!: boolean;
 }
 
 @InputType()
@@ -79,6 +88,8 @@ export class SaveClassroomInput {
   @Field() @IsString() @MinLength(1) term!: string;
   @Field(() => ID) @IsString() teacherId!: string;
   @Field(() => ID, { nullable: true }) @IsOptional() @IsString() gradingSchemeId?: string;
+  @Field(() => EducationLevel) @IsEnum(EducationLevel) educationLevel!: EducationLevel;
+  @Field({ defaultValue: false }) @IsBoolean() isAdvisory!: boolean;
 }
 
 @ObjectType()
@@ -88,6 +99,9 @@ export class AdminStudent {
   @Field() firstName!: string;
   @Field() lastName!: string;
   @Field({ nullable: true }) email?: string;
+  @Field({ nullable: true }) lrn?: string;
+  @Field({ nullable: true }) birthDate?: Date;
+  @Field(() => LearnerSex, { nullable: true }) sex?: LearnerSex;
   @Field(() => [AdminClassroom]) classes!: AdminClassroom[];
   @Field() createdAt!: Date;
 }
@@ -100,6 +114,9 @@ export class SaveStudentInput {
   @Field() @IsString() @MinLength(1) firstName!: string;
   @Field() @IsString() @MinLength(1) lastName!: string;
   @Field({ nullable: true }) @IsOptional() @IsEmail() email?: string;
+  @Field({ nullable: true }) @IsOptional() @IsString() lrn?: string;
+  @Field({ nullable: true }) @IsOptional() @IsDateString() birthDate?: string;
+  @Field(() => LearnerSex, { nullable: true }) @IsOptional() @IsEnum(LearnerSex) sex?: LearnerSex;
   @Field(() => [ID]) @IsArray() @ArrayUnique() @IsString({ each: true }) classroomIds!: string[];
 }
 

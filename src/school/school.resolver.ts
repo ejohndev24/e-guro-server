@@ -1,6 +1,6 @@
 import { Args, ID, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { UseGuards } from '@nestjs/common';
-import { AttendanceStatus } from '@prisma/client';
+import { AttendanceScope, AttendanceStatus, SchoolReportKind, SchoolReportStatus } from '@prisma/client';
 import { SchoolService } from './school.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { GqlAuthGuard } from '../auth/gql-auth.guard';
@@ -11,6 +11,8 @@ import {
   ClassDetail,
   Classroom,
   CreateAssessmentInput,
+  CreateStudentGroupInput,
+  SetGroupAdviserInput,
   ConfigureClassGradingInput,
   Dashboard,
   Gradebook,
@@ -19,11 +21,13 @@ import {
   SaveAssessmentScoresInput,
   SaveGradebookScoresInput,
   Student,
+  StudentGroup,
   StudentProfile,
   TeacherStudentInput,
   TeacherClassInput,
   ImportStudentsPayload,
 } from './school.types';
+import { ObservedValueEntry, ReportSchool, ReportStatusPayload, SaveObservedValueInput, Sf2Report, Sf5Report, Sf9Report, UpdateSchoolProfileInput } from './school.report-types';
 
 @Resolver()
 @UseGuards(GqlAuthGuard)
@@ -48,6 +52,16 @@ export class SchoolResolver {
     return this.school.createClass(input, user.sub);
   }
 
+  @Mutation(() => StudentGroup)
+  createStudentGroup(@Args('input') input: CreateStudentGroupInput, @CurrentUser() user: JwtUser) {
+    return this.school.createStudentGroup(input, user.sub);
+  }
+
+  @Mutation(() => StudentGroup)
+  setGroupAdviser(@Args('input') input: SetGroupAdviserInput, @CurrentUser() user: JwtUser) {
+    return this.school.setGroupAdviser(input, user.sub);
+  }
+
   @Mutation(() => Student)
   addStudentToClass(@Args('input') input: AddStudentToClassInput, @CurrentUser() user: JwtUser) {
     return this.school.addStudentToClass(input, user.sub);
@@ -69,13 +83,19 @@ export class SchoolResolver {
     @CurrentUser() user: JwtUser,
     @Args('quarter', { type: () => Int, defaultValue: 1 }) quarter: number,
     @Args('date', { nullable: true }) date?: string,
+    @Args('attendanceScope', { type: () => AttendanceScope, defaultValue: AttendanceScope.SUBJECT }) attendanceScope?: AttendanceScope,
   ) {
-    return this.school.classDetail(id, date, quarter, user.sub);
+    return this.school.classDetail(id, date, quarter, user.sub, attendanceScope);
   }
 
   @Query(() => [Student])
   students(@CurrentUser() user: JwtUser, @Args('search', { nullable: true }) search?: string) {
     return this.school.students(user.sub, search);
+  }
+
+  @Query(() => [StudentGroup])
+  studentGroups(@CurrentUser() user: JwtUser) {
+    return this.school.studentGroups(user.sub);
   }
 
   @Query(() => StudentProfile)
@@ -89,10 +109,46 @@ export class SchoolResolver {
     @Args('studentId', { type: () => ID }) studentId: string,
     @Args('date') date: string,
     @Args('status', { type: () => AttendanceStatus }) status: AttendanceStatus,
+    @Args('reason', { type: () => String, nullable: true }) reason: string,
+    @Args('scope', { type: () => AttendanceScope, defaultValue: AttendanceScope.SUBJECT }) scope: AttendanceScope,
     @CurrentUser() user: JwtUser,
   ) {
-    return this.school.setAttendance(classroomId, studentId, date, status, user.sub);
+    return this.school.setAttendance(classroomId, studentId, date, status, user.sub, scope, reason);
   }
+
+  @Query(() => Sf2Report)
+  sf2Report(@Args('classroomId', { type: () => ID }) classroomId: string, @Args('month') month: string, @CurrentUser() user: JwtUser) {
+    return this.school.sf2Report(classroomId, month, user.sub);
+  }
+
+  @Query(() => Sf9Report)
+  sf9Report(@Args('classroomId', { type: () => ID }) classroomId: string, @Args('studentId', { type: () => ID }) studentId: string, @CurrentUser() user: JwtUser) {
+    return this.school.sf9Report(classroomId, studentId, user.sub);
+  }
+
+  @Query(() => Sf5Report)
+  sf5Report(@Args('classroomId', { type: () => ID }) classroomId: string, @CurrentUser() user: JwtUser) {
+    return this.school.sf5Report(classroomId, user.sub);
+  }
+
+  @Mutation(() => ReportStatusPayload)
+  setSchoolReportStatus(
+    @Args('kind', { type: () => SchoolReportKind }) kind: SchoolReportKind,
+    @Args('classroomId', { type: () => ID }) classroomId: string,
+    @Args('periodKey') periodKey: string,
+    @Args('status', { type: () => SchoolReportStatus }) status: SchoolReportStatus,
+    @CurrentUser() user: JwtUser,
+    @Args('studentId', { type: () => ID, nullable: true }) studentId?: string,
+  ) { return this.school.setReportStatus(kind, classroomId, periodKey, status, user.sub, studentId); }
+
+  @Query(() => ReportSchool)
+  mySchoolProfile(@CurrentUser() user: JwtUser) { return this.school.mySchoolProfile(user.sub); }
+
+  @Mutation(() => ReportSchool)
+  updateMySchoolProfile(@Args('input') input: UpdateSchoolProfileInput, @CurrentUser() user: JwtUser) { return this.school.updateMySchoolProfile(input, user.sub); }
+
+  @Mutation(() => ObservedValueEntry)
+  saveObservedValue(@Args('input') input: SaveObservedValueInput, @CurrentUser() user: JwtUser) { return this.school.saveObservedValue(input, user.sub); }
 
   @Mutation(() => SaveGradesPayload)
   saveGrades(@Args('input') input: SaveGradesInput, @CurrentUser() user: JwtUser) {

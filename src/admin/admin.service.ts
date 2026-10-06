@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { SchoolReportStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateGradingSchemeInput, CreateSchoolInput, InviteTeacherInput, SaveClassroomInput, SaveStudentInput } from './admin.types';
+import { UpdateSchoolProfileInput } from '../school/school.report-types';
 import { MailService } from './mail.service';
 
 @Injectable()
@@ -175,9 +176,11 @@ export class AdminService {
     });
     if (!teacher) throw new BadRequestException('Select a teacher from this school');
     if (input.startTime >= input.endTime) throw new BadRequestException('End time must be later than start time');
+    if (!['KINDERGARTEN', 'ELEMENTARY', 'JUNIOR_HIGH', 'SENIOR_HIGH'].includes(input.educationLevel) && input.isAdvisory) throw new BadRequestException('Official daily attendance is available only for DepEd basic-education classes');
     if (input.gradingSchemeId) {
       const scheme = await this.prisma.gradingScheme.findFirst({ where: { id: input.gradingSchemeId, schoolId: input.schoolId } });
       if (!scheme) throw new BadRequestException('Select a grading template from this school');
+      if (scheme.educationLevel !== input.educationLevel) throw new BadRequestException('The grading template must match the class education level');
     }
     const data = {
       subject: input.subject.trim(),
@@ -191,15 +194,34 @@ export class AdminService {
       term: input.term.trim(),
       teacherId: teacher.id,
       gradingSchemeId: input.gradingSchemeId || null,
+      educationLevel: input.educationLevel,
+      isAdvisory: input.isAdvisory,
     };
+    let group = await this.prisma.classGroup.findFirst({ where: { teacherId: teacher.id, gradeLevel: input.gradeLevel, section: { equals: input.section.trim(), mode: 'insensitive' }, schoolYear: input.schoolYear.trim(), term: input.term.trim() }, include: { memberships: true } });
+    if (!group) group = await this.prisma.classGroup.create({ data: { gradeLevel: input.gradeLevel, section: input.section.trim(), schoolYear: input.schoolYear.trim(), term: input.term.trim(), educationLevel: input.educationLevel, isAdvisory: input.isAdvisory, teacherId: teacher.id, schoolId: input.schoolId }, include: { memberships: true } });
+    else if (input.isAdvisory && !group.isAdvisory) group = await this.prisma.classGroup.update({ where: { id: group.id }, data: { isAdvisory: true }, include: { memberships: true } });
+    if (input.isAdvisory) {
+      await this.prisma.classroom.updateMany({
+        where: {
+          schoolId: input.schoolId,
+          gradeLevel: input.gradeLevel,
+          section: { equals: input.section.trim(), mode: 'insensitive' },
+          schoolYear: input.schoolYear.trim(),
+          term: input.term.trim(),
+          ...(input.id ? { id: { not: input.id } } : {}),
+        },
+        data: { isAdvisory: false },
+      });
+    }
     let savedId: string;
     if (input.id) {
       const existing = await this.prisma.classroom.findFirst({ where: { id: input.id, schoolId: input.schoolId } });
       if (!existing) throw new NotFoundException('Class not found');
-      const updated = await this.prisma.classroom.update({ where: { id: existing.id }, data });
+      const updated = await this.prisma.classroom.update({ where: { id: existing.id }, data: { ...data, groupId: group.id } });
       savedId = updated.id;
     } else {
-      const created = await this.prisma.classroom.create({ data: { ...data, schoolId: input.schoolId } });
+      const created = await this.prisma.classroom.create({ data: { ...data, schoolId: input.schoolId, groupId: group.id } });
+      if (group.memberships.length) await this.prisma.enrollment.createMany({ data: group.memberships.map((membership) => ({ classroomId: created.id, studentId: membership.studentId })), skipDuplicates: true });
       savedId = created.id;
     }
     const classes = await this.schoolClasses(input.schoolId);
@@ -215,6 +237,9 @@ export class AdminService {
       firstName: input.firstName.trim(),
       lastName: input.lastName.trim(),
       email: input.email?.trim().toLowerCase() || null,
+      lrn: input.lrn?.trim() || null,
+      birthDate: input.birthDate ? new Date(`${input.birthDate}T00:00:00.000Z`) : null,
+      sex: input.sex ?? null,
     };
     const duplicate = await this.prisma.student.findFirst({
       where: { schoolId: input.schoolId, studentNo: data.studentNo, ...(input.id ? { id: { not: input.id } } : {}) },
@@ -222,21 +247,37 @@ export class AdminService {
     if (duplicate) throw new BadRequestException('That student number is already used in this school');
 
     const student = await this.prisma.$transaction(async (tx) => {
-      if (input.id) {
-        const existing = await tx.student.findFirst({ where: { id: input.id, schoolId: input.schoolId } });
-        if (!existing) throw new NotFoundException('Student not found');
-        await tx.enrollment.deleteMany({ where: { studentId: existing.id } });
-        return tx.student.update({
-          where: { id: existing.id },
-          data: { ...data, enrollments: { create: input.classroomIds.map((classroomId) => ({ classroomId })) } },
-        });
+      const existing = input.id ? await tx.student.findFirst({ where: { id: input.id, schoolId: input.schoolId }, include: { enrollments: { select: { classroomId: true } } } }) : null;
+      if (existing) {
+        const locked = await tx.schoolReport.findFirst({ where: { schoolId: input.schoolId, status: SchoolReportStatus.LOCKED, OR: [{ studentId: existing.id }, { classroomId: { in: existing.enrollments.map((item) => item.classroomId) } }] } });
+        if (locked) throw new BadRequestException(`${locked.kind} is locked. This learner's report details can no longer be changed.`);
       }
-      const qrCode = `STUDENT:${input.schoolId}:${data.studentNo}:${randomBytes(8).toString('hex')}`;
-      return tx.student.create({
-        data: { ...data, qrCode, schoolId: input.schoolId, enrollments: { create: input.classroomIds.map((classroomId) => ({ classroomId })) } },
-      });
+      let saved;
+      if (input.id) {
+        const current = await tx.student.findFirst({ where: { id: input.id, schoolId: input.schoolId } });
+        if (!current) throw new NotFoundException('Student not found');
+        await tx.enrollment.deleteMany({ where: { studentId: current.id } });
+        await tx.groupMembership.deleteMany({ where: { studentId: current.id } });
+        saved = await tx.student.update({ where: { id: current.id }, data });
+      } else {
+        const qrCode = `STUDENT:${input.schoolId}:${data.studentNo}:${randomBytes(8).toString('hex')}`;
+        saved = await tx.student.create({ data: { ...data, qrCode, schoolId: input.schoolId } });
+      }
+      const groups = await tx.classGroup.findMany({ where: { classrooms: { some: { id: { in: input.classroomIds } } } }, include: { classrooms: { select: { id: true } } } });
+      if (groups.length) await tx.groupMembership.createMany({ data: groups.map((group) => ({ groupId: group.id, studentId: saved.id })), skipDuplicates: true });
+      const classroomIds = [...new Set([...input.classroomIds, ...groups.flatMap((group) => group.classrooms.map((classroom) => classroom.id))])];
+      if (classroomIds.length) await tx.enrollment.createMany({ data: classroomIds.map((classroomId) => ({ classroomId, studentId: saved.id })), skipDuplicates: true });
+      return saved;
     });
     return (await this.schoolStudents(input.schoolId)).find((item) => item.id === student.id)!;
+  }
+
+  async updateSchoolProfile(schoolId: string, input: UpdateSchoolProfileInput) {
+    const locked = await this.prisma.schoolReport.findFirst({ where: { schoolId, status: SchoolReportStatus.LOCKED } });
+    if (locked) throw new BadRequestException(`${locked.kind} is locked. School report details can no longer be changed.`);
+    const clean = (value?: string) => value?.trim() || null;
+    await this.prisma.school.update({ where: { id: schoolId }, data: { schoolIdNumber: clean(input.schoolIdNumber), region: clean(input.region), division: clean(input.division), district: clean(input.district), address: clean(input.address), schoolHeadName: clean(input.schoolHeadName) } });
+    return this.school(schoolId);
   }
 
   async gradingSchemes(schoolId: string) {
