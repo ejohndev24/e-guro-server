@@ -62,7 +62,7 @@ export class SchoolService {
   async createClass(input: TeacherClassInput, teacherId: string) {
     const teacher = await this.prisma.user.findUnique({ where: { id: teacherId }, include: { school: true } });
     if (!teacher || teacher.role !== UserRole.TEACHER) throw new NotFoundException('Teacher account not found');
-    if (!teacher.school?.isPersonal) throw new BadRequestException('School-managed classes are created by the school administrator');
+    if (!teacher.school) throw new NotFoundException('Teacher school not found');
     if (input.startTime >= input.endTime) throw new BadRequestException('End time must be later than start time');
     const group = input.groupId ? await this.prisma.classGroup.findFirst({ where: { id: input.groupId, teacherId, schoolId: teacher.school.id }, include: { memberships: true, classrooms: { select: { id: true } } } }) : null;
     if (input.groupId && !group) throw new NotFoundException('Group not found');
@@ -108,12 +108,50 @@ export class SchoolService {
   async createStudentGroup(input: CreateStudentGroupInput, teacherId: string) {
     const teacher = await this.prisma.user.findUnique({ where: { id: teacherId }, include: { school: true } });
     if (!teacher || teacher.role !== UserRole.TEACHER) throw new NotFoundException('Teacher account not found');
-    if (!teacher.school?.isPersonal) throw new BadRequestException('School-managed groups are created by the school administrator');
+    if (!teacher.school) throw new NotFoundException('Teacher school not found');
     if (!supportsDepEdDailyAttendance(input.educationLevel) && input.isAdvisory) throw new BadRequestException('Only basic-education groups can be advisory groups');
     const duplicate = await this.prisma.classGroup.findFirst({ where: { teacherId, gradeLevel: input.gradeLevel, section: { equals: input.section.trim(), mode: 'insensitive' }, schoolYear: input.schoolYear.trim(), term: input.term.trim() } });
     if (duplicate) throw new BadRequestException('This group already exists for the selected school year and term');
     const group = await this.prisma.classGroup.create({ data: { ...input, section: input.section.trim(), schoolYear: input.schoolYear.trim(), term: input.term.trim(), teacherId, schoolId: teacher.school.id }, include: { classrooms: { include: { _count: { select: { enrollments: true } } } }, memberships: { include: { student: true } } } });
     return this.studentGroupShape(group);
+  }
+
+  async deleteStudentGroup(groupId: string, teacherId: string) {
+    const group = await this.prisma.classGroup.findFirst({
+      where: { id: groupId, teacherId },
+      include: { classrooms: { select: { id: true } }, memberships: { select: { studentId: true } } },
+    });
+    if (!group) throw new NotFoundException('Section not found');
+
+    const classroomIds = group.classrooms.map((classroom) => classroom.id);
+    const studentIds = [...new Set(group.memberships.map((membership) => membership.studentId))];
+    await this.prisma.$transaction(async (tx) => {
+      if (classroomIds.length) await tx.classroom.deleteMany({ where: { id: { in: classroomIds }, teacherId } });
+      await tx.classGroup.delete({ where: { id: group.id } });
+      if (studentIds.length) {
+        await tx.student.deleteMany({
+          where: { id: { in: studentIds }, schoolId: group.schoolId, groupMemberships: { none: {} }, enrollments: { none: {} } },
+        });
+      }
+    });
+    return true;
+  }
+
+  async removeStudentFromGroup(groupId: string, studentId: string, teacherId: string) {
+    const group = await this.prisma.classGroup.findFirst({
+      where: { id: groupId, teacherId, memberships: { some: { studentId } } },
+      include: { classrooms: { select: { id: true } } },
+    });
+    if (!group) throw new NotFoundException('Student is not in this section');
+
+    const classroomIds = group.classrooms.map((classroom) => classroom.id);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.groupMembership.deleteMany({ where: { groupId, studentId } });
+      if (classroomIds.length) await tx.enrollment.deleteMany({ where: { studentId, classroomId: { in: classroomIds } } });
+      const remaining = await tx.student.findUnique({ where: { id: studentId }, select: { groupMemberships: { select: { id: true }, take: 1 }, enrollments: { select: { id: true }, take: 1 } } });
+      if (remaining && !remaining.groupMemberships.length && !remaining.enrollments.length) await tx.student.delete({ where: { id: studentId } });
+    });
+    return true;
   }
 
   async setGroupAdviser(input: SetGroupAdviserInput, teacherId: string) {
@@ -134,7 +172,6 @@ export class SchoolService {
       where: { id: input.classroomId, teacherId }, include: { school: true, group: { include: { classrooms: { select: { id: true } } } } },
     });
     if (!classroom) throw new NotFoundException('Classroom not found');
-    if (!classroom.school.isPersonal) throw new BadRequestException('School students are managed by the school administrator');
     const studentNo = input.studentNo.trim();
     const student = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.student.findUnique({ where: { schoolId_studentNo: { schoolId: classroom.schoolId, studentNo } } });
@@ -176,7 +213,6 @@ export class SchoolService {
   private async personalTeacher(teacherId: string) {
     const teacher = await this.prisma.user.findUnique({ where: { id: teacherId }, include: { school: true } });
     if (!teacher || teacher.role !== UserRole.TEACHER) throw new NotFoundException('Teacher account not found');
-    if (!teacher.school?.isPersonal) throw new BadRequestException('School students are managed by the school administrator');
     return teacher;
   }
 
@@ -225,8 +261,12 @@ export class SchoolService {
         if (input.classroomIds.length) {
           await tx.enrollment.createMany({ data: input.classroomIds.map((classroomId) => ({ studentId: student.id, classroomId })), skipDuplicates: true });
         }
-        if (input.groupIds.length) {
-          const groups = await tx.classGroup.findMany({ where: { id: { in: input.groupIds } }, include: { classrooms: { select: { id: true } } } });
+        const classGroups = input.classroomIds.length
+          ? await tx.classGroup.findMany({ where: { classrooms: { some: { id: { in: input.classroomIds } } } }, select: { id: true } })
+          : [];
+        const groupIds = [...new Set([...input.groupIds, ...classGroups.map((group) => group.id)])];
+        if (groupIds.length) {
+          const groups = await tx.classGroup.findMany({ where: { id: { in: groupIds } }, include: { classrooms: { select: { id: true } } } });
           await tx.groupMembership.createMany({ data: groups.map((group) => ({ groupId: group.id, studentId: student.id })), skipDuplicates: true });
           const groupedClassrooms = groups.flatMap((group) => group.classrooms.map((classroom) => classroom.id));
           if (groupedClassrooms.length) await tx.enrollment.createMany({ data: groupedClassrooms.map((classroomId) => ({ classroomId, studentId: student.id })), skipDuplicates: true });

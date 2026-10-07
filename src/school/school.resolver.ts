@@ -57,6 +57,16 @@ export class SchoolResolver {
     return this.school.createStudentGroup(input, user.sub);
   }
 
+  @Mutation(() => Boolean)
+  deleteStudentGroup(@Args('groupId', { type: () => ID }) groupId: string, @CurrentUser() user: JwtUser) {
+    return this.school.deleteStudentGroup(groupId, user.sub);
+  }
+
+  @Mutation(() => Boolean)
+  removeStudentFromGroup(@Args('groupId', { type: () => ID }) groupId: string, @Args('studentId', { type: () => ID }) studentId: string, @CurrentUser() user: JwtUser) {
+    return this.school.removeStudentFromGroup(groupId, studentId, user.sub);
+  }
+
   @Mutation(() => StudentGroup)
   setGroupAdviser(@Args('input') input: SetGroupAdviserInput, @CurrentUser() user: JwtUser) {
     return this.school.setGroupAdviser(input, user.sub);
