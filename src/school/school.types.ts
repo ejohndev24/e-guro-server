@@ -167,7 +167,7 @@ export class TeacherClassInput {
   @Field() @Matches(/^\d{4}-\d{4}$/) schoolYear!: string;
   @Field() @IsString() @MinLength(1) term!: string;
   @Field(() => EducationLevel) @IsEnum(EducationLevel) educationLevel!: EducationLevel;
-  @Field({ defaultValue: false }) isAdvisory!: boolean;
+  @Field({ defaultValue: false }) @IsBoolean() isAdvisory!: boolean;
 }
 
 @InputType()
