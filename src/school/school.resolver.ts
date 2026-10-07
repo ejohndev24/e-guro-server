@@ -52,6 +52,11 @@ export class SchoolResolver {
     return this.school.createClass(input, user.sub);
   }
 
+  @Mutation(() => Boolean)
+  deleteClass(@Args('classroomId', { type: () => ID }) classroomId: string, @CurrentUser() user: JwtUser) {
+    return this.school.deleteClass(classroomId, user.sub);
+  }
+
   @Mutation(() => StudentGroup)
   createStudentGroup(@Args('input') input: CreateStudentGroupInput, @CurrentUser() user: JwtUser) {
     return this.school.createStudentGroup(input, user.sub);

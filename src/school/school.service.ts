@@ -105,6 +105,13 @@ export class SchoolService {
     return classroomShape(classroom);
   }
 
+  async deleteClass(classroomId: string, teacherId: string) {
+    const classroom = await this.prisma.classroom.findFirst({ where: { id: classroomId, teacherId }, select: { id: true } });
+    if (!classroom) throw new NotFoundException('Class not found');
+    await this.prisma.classroom.delete({ where: { id: classroom.id } });
+    return true;
+  }
+
   async createStudentGroup(input: CreateStudentGroupInput, teacherId: string) {
     const teacher = await this.prisma.user.findUnique({ where: { id: teacherId }, include: { school: true } });
     if (!teacher || teacher.role !== UserRole.TEACHER) throw new NotFoundException('Teacher account not found');
