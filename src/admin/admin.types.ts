@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) Emil John Benitez, 2026. All rights reserved. This computer
+ * program is protected by copyright laws  and international treaties, and it
+ * or any part thereof, may not be copied,  reproduced, utilized, distributed
+ * or an adaptation thereof be made,  without the prior authority and consent
+ * of PharmaServ Express.  Any unauthorized use of this program will be dealt
+ * with and  prosecuted to the maximum extent possible under  the law and may
+ * result in civil and criminal liabilities.
+ */
 import { Field, Float, ID, InputType, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import { EducationLevel, GradingSchemeStatus, LearnerSex, UserRole } from '@prisma/client';
 import { Type } from 'class-transformer';
