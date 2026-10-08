@@ -12,7 +12,7 @@ import * as argon2 from 'argon2';
 
 const prisma = new PrismaClient();
 
-const learners = [
+const studentSeedData = [
   ['2024001', 'Maria Sofia', 'Cruz'],
   ['2024002', 'John', 'Dela Cruz'],
   ['2024003', 'Ana', 'Garcia'],
@@ -78,7 +78,7 @@ async function main() {
     },
   });
 
-  const students = await Promise.all(learners.map(([studentNo, firstName, lastName]) => prisma.student.create({
+  const students = await Promise.all(studentSeedData.map(([studentNo, firstName, lastName]) => prisma.student.create({
     data: {
       studentNo,
       schoolId: school.id,

@@ -259,7 +259,7 @@ export class AdminService {
       const existing = input.id ? await tx.student.findFirst({ where: { id: input.id, schoolId: input.schoolId }, include: { enrollments: { select: { classroomId: true } } } }) : null;
       if (existing) {
         const locked = await tx.schoolReport.findFirst({ where: { schoolId: input.schoolId, status: SchoolReportStatus.LOCKED, OR: [{ studentId: existing.id }, { classroomId: { in: existing.enrollments.map((item) => item.classroomId) } }] } });
-        if (locked) throw new BadRequestException(`${locked.kind} is locked. This learner's report details can no longer be changed.`);
+        if (locked) throw new BadRequestException(`${locked.kind} is locked. This student's report details can no longer be changed.`);
       }
       let saved;
       if (input.id) {

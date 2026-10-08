@@ -191,7 +191,7 @@ export class SchoolService {
     const studentNo = input.studentNo.trim();
     const student = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.student.findUnique({ where: { schoolId_studentNo: { schoolId: classroom.schoolId, studentNo } } });
-      const saved = existing ?? await tx.student.create({ data: { studentNo, firstName: input.firstName.trim(), lastName: input.lastName.trim(), email: input.email?.trim().toLowerCase() || null, schoolId: classroom.schoolId, qrCode: `STUDENT:${classroom.schoolId}:${studentNo}:${randomBytes(8).toString('hex')}` } });
+      const saved = existing ?? await tx.student.create({ data: { studentNo, firstName: input.firstName.trim(), lastName: input.lastName.trim(), email: input.email?.trim().toLowerCase() || null, lrn: input.lrn?.trim() || null, birthDate: input.birthDate ? dayStart(new Date(input.birthDate)) : null, sex: input.sex ?? null, schoolId: classroom.schoolId, qrCode: `STUDENT:${classroom.schoolId}:${studentNo}:${randomBytes(8).toString('hex')}` } });
       const classroomIds = classroom.group?.classrooms.map((item) => item.id) ?? [classroom.id];
       await tx.enrollment.createMany({ data: classroomIds.map((classroomId) => ({ studentId: saved.id, classroomId })), skipDuplicates: true });
       if (classroom.groupId) await tx.groupMembership.createMany({ data: [{ groupId: classroom.groupId, studentId: saved.id }], skipDuplicates: true });
@@ -263,7 +263,7 @@ export class SchoolService {
               ],
             },
           });
-          if (locked) throw new BadRequestException(`${locked.kind} is locked. This learner's report details can no longer be changed.`);
+          if (locked) throw new BadRequestException(`${locked.kind} is locked. This student's report details can no longer be changed.`);
         }
         const student = await tx.student.upsert({
           where: { schoolId_studentNo: { schoolId, studentNo } },
@@ -468,7 +468,7 @@ export class SchoolService {
       throw new BadRequestException('Official daily attendance is available only to the assigned basic-education class adviser');
     }
     const enrolled = await this.prisma.enrollment.count({ where: { classroomId, studentId } });
-    if (!enrolled) throw new BadRequestException('The learner is not enrolled in this class');
+    if (!enrolled) throw new BadRequestException('The student is not enrolled in this class');
     const cleanReason = status === AttendanceStatus.EXCUSED ? reason?.trim() : undefined;
     if (status === AttendanceStatus.EXCUSED && !cleanReason) throw new BadRequestException('Enter a reason for an excused absence');
     const checkedAt = status === AttendanceStatus.PRESENT || status === AttendanceStatus.LATE ? new Date() : null;
@@ -747,7 +747,7 @@ export class SchoolService {
       throw new BadRequestException('SF9 applies to Grades 1-12. Kindergarten uses the applicable Kindergarten progress report.');
     }
     const enrollment = advisory.enrollments.find((item) => item.studentId === studentId);
-    if (!enrollment) throw new BadRequestException('The learner is not in this advisory section');
+    if (!enrollment) throw new BadRequestException('The student is not in this advisory section');
     const classes = await this.prisma.classroom.findMany({
       where: { schoolId: advisory.schoolId, gradeLevel: advisory.gradeLevel, section: { equals: advisory.section, mode: 'insensitive' }, schoolYear: advisory.schoolYear, term: advisory.term, enrollments: { some: { studentId } } },
       include: { grades: { where: { studentId }, orderBy: { quarter: 'asc' } } }, orderBy: { subject: 'asc' },
@@ -768,9 +768,9 @@ export class SchoolService {
     const observedValues = coreValues.map((coreValue) => ({ coreValue, quarters: [1, 2, 3, 4].map((quarter) => observed.find((item) => item.coreValue === coreValue && item.quarter === quarter)?.rating ?? null) }));
     const student = enrollment.student;
     const missingFields = [...this.schoolMissing(advisory.school)];
-    if (!student.lrn) missingFields.push('Learner LRN');
-    if (!student.birthDate) missingFields.push('Learner birth date');
-    if (!student.sex) missingFields.push('Learner sex');
+    if (!student.lrn) missingFields.push('Student LRN');
+    if (!student.birthDate) missingFields.push('Student birth date');
+    if (!student.sex) missingFields.push('Student sex');
     if (!subjects.length || subjects.some((subject) => subject.finalRating == null)) missingFields.push('Complete Q1-Q4 subject grades');
     if (observedValues.some((value) => value.quarters.some((rating) => rating == null))) missingFields.push('Q1-Q4 observed values');
     const variant = advisory.educationLevel === EducationLevel.ELEMENTARY ? 'SF9-ES' : advisory.educationLevel === EducationLevel.JUNIOR_HIGH ? 'SF9-JHS' : 'SF9-SHS';
@@ -829,7 +829,7 @@ export class SchoolService {
 
   async saveObservedValue(input: SaveObservedValueInput, teacherId: string) {
     const classroom = await this.advisoryClass(input.classroomId, teacherId);
-    if (!classroom.enrollments.some((item) => item.studentId === input.studentId)) throw new BadRequestException('The learner is not in this advisory section');
+    if (!classroom.enrollments.some((item) => item.studentId === input.studentId)) throw new BadRequestException('The student is not in this advisory section');
     const locked = await this.prisma.schoolReport.findUnique({ where: { reportKey: this.reportKey(SchoolReportKind.SF9, classroom.id, classroom.schoolYear, input.studentId) } });
     if (locked?.status === SchoolReportStatus.LOCKED) throw new BadRequestException('SF9 is locked. Observed values can no longer be changed.');
     const coreValue = input.coreValue.trim();

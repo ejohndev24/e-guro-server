@@ -186,6 +186,9 @@ export class AddStudentToClassInput {
   @Field() @IsString() @MinLength(1) firstName!: string;
   @Field() @IsString() @MinLength(1) lastName!: string;
   @Field({ nullable: true }) @IsOptional() @IsEmail() email?: string;
+  @Field({ nullable: true }) @IsOptional() @IsString() lrn?: string;
+  @Field({ nullable: true }) @IsOptional() @IsDateString() birthDate?: string;
+  @Field(() => LearnerSex, { nullable: true }) @IsOptional() @IsEnum(LearnerSex) sex?: LearnerSex;
 }
 
 @InputType()
